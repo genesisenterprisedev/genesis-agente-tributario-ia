@@ -1,0 +1,16 @@
+{
+  "name": "Agente Tributário IA",
+  "short_name": "Agente IA",
+  "description": "Assistente de IA especialista em tributação brasileira",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1f2937",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
