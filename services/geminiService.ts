@@ -59,7 +59,7 @@ export async function generateTitle(query: string): Promise<string> {
     });
     // Extrai o texto de forma segura, tratando response.text como opcional.
     // Limpa possíveis aspas extras na resposta.
-    const content = response.text?.trim().replace(/["']/g, "") ?? null;
+    const content = (response.text ?? "").trim().replace(/["']/g, "");
 
     if (!content) {
       console.warn("Gemini title generation returned empty response.");
