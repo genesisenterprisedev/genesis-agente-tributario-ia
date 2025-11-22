@@ -57,13 +57,17 @@ export async function generateTitle(query: string): Promise<string> {
       model: GEMINI_FLASH, // Use the faster model for this simple task
       contents: prompt,
     });
-    // Extract text directly from response.text as per guidelines.
-    // Clean up the response to remove potential quotes or newlines.
-    if (response.text) {
-      return response.text.trim().replace(/["']/g, "");
+    // Extrai o texto de forma segura, tratando response.text como opcional.
+    // Limpa possíveis aspas extras na resposta.
+    const content = response.text?.trim().replace(/["']/g, "") ?? null;
+
+    if (!content) {
+      console.warn("Gemini title generation returned empty response.");
+      // Fallback se o modelo não retornar texto útil
+      return query.substring(0, 30) + "...";
     }
-    // Fallback if text is undefined
-    return query.substring(0, 30) + "...";
+
+    return content;
   } catch (error) {
     console.error("Error generating title:", error);
     // Return a generic title or a snippet of the query as a fallback
