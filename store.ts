@@ -582,7 +582,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (user) {
       try {
         // RLS on user_profiles ensures we only get the current user's profile.
-        const { data: profile, error: profileError } = await supabase
+        const { data: _profile, error: profileError } = await supabase
           .from("user_profiles")
           .select("user_id, full_name")
           .eq("user_id", user.id)

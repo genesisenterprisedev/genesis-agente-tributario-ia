@@ -1,14 +1,21 @@
 import { GoogleGenAI } from "@google/genai";
 import { WebSource } from "../types";
 
-// Initialize GoogleGenAI with API key from Next.js environment variables
-const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-if (!apiKey) {
-  throw new Error(
-    "NEXT_PUBLIC_GEMINI_API_KEY não está configurada no arquivo .env.local"
-  );
+// Lazy initialization of GoogleGenAI to avoid build-time errors
+let ai: GoogleGenAI | null = null;
+
+function getAI(): GoogleGenAI {
+  if (!ai) {
+    const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error(
+        "NEXT_PUBLIC_GEMINI_API_KEY não está configurada no arquivo .env.local"
+      );
+    }
+    ai = new GoogleGenAI({ apiKey });
+  }
+  return ai;
 }
-const ai = new GoogleGenAI({ apiKey });
 
 // FIX: Define model names according to guidelines.
 export const GEMINI_PRO = "gemini-2.5-pro";
@@ -45,14 +52,18 @@ export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
 export async function generateTitle(query: string): Promise<string> {
   try {
     const prompt = `Gere um título curto e descritivo (3-5 palavras) para uma conversa que começa com a seguinte pergunta do usuário. Responda apenas com o título. Pergunta: "${query}"`;
-    // Use ai.models.generateContent as per guidelines.
-    const response = await ai.models.generateContent({
+    // Use getAI().models.generateContent as per guidelines.
+    const response = await getAI().models.generateContent({
       model: GEMINI_FLASH, // Use the faster model for this simple task
       contents: prompt,
     });
     // Extract text directly from response.text as per guidelines.
     // Clean up the response to remove potential quotes or newlines.
-    return response.text.trim().replace(/["']/g, "");
+    if (response.text) {
+      return response.text.trim().replace(/["']/g, "");
+    }
+    // Fallback if text is undefined
+    return query.substring(0, 30) + "...";
   } catch (error) {
     console.error("Error generating title:", error);
     // Return a generic title or a snippet of the query as a fallback
@@ -75,15 +86,15 @@ export async function generateResponse(
     config.tools = [{ googleSearch: {} }];
   }
 
-  // Use ai.models.generateContent as per guidelines.
-  const response = await ai.models.generateContent({
+  // Use getAI().models.generateContent as per guidelines.
+  const response = await getAI().models.generateContent({
     model: modelName,
     contents: prompt,
     config,
   });
 
   // Extract text directly from response.text as per guidelines.
-  const text = response.text;
+  const text = response.text || "";
 
   // Extract web sources from grounding metadata if web search was used
   const sources: WebSource[] = [];
@@ -91,7 +102,7 @@ export async function generateResponse(
     const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
     if (groundingMetadata?.groundingChunks) {
       for (const chunk of groundingMetadata.groundingChunks) {
-        if (chunk.web) {
+        if (chunk.web?.uri) {
           sources.push({
             uri: chunk.web.uri,
             title: chunk.web.title || chunk.web.uri, // Use URI as fallback for title
