@@ -1,25 +1,77 @@
-import { GoogleGenAI } from "@google/genai";
 import { WebSource } from "../types";
 
-// Lazy initialization of GoogleGenAI to avoid build-time errors
-let ai: GoogleGenAI | null = null;
+const OPENROUTER_API_BASE =
+  process.env.NEXT_PUBLIC_OPENROUTER_API_URL || "https://openrouter.ai";
 
-function getAI(): GoogleGenAI {
-  if (!ai) {
-    const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error(
-        "NEXT_PUBLIC_GEMINI_API_KEY não está configurada no arquivo .env.local"
-      );
-    }
-    ai = new GoogleGenAI({ apiKey });
+const OPENROUTER_API_URL = `${OPENROUTER_API_BASE.replace(
+  /\/$/,
+  ""
+)}/api/v1/chat/completions`;
+
+function getOpenRouterApiKey(): string {
+  const apiKey = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "NEXT_PUBLIC_OPENROUTER_API_KEY não está configurada no arquivo .env.local"
+    );
   }
-  return ai;
+  return apiKey;
 }
 
+function getOpenRouterModel(modelName: string): string {
+  return process.env.NEXT_PUBLIC_OPENROUTER_MODEL || modelName;
+}
+
+async function callOpenRouter(
+  prompt: string,
+  modelName: string
+): Promise<string> {
+  const apiKey = getOpenRouterApiKey();
+  const model = getOpenRouterModel(modelName);
+
+  const response = await fetch(OPENROUTER_API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      "OpenRouter request failed with status " +
+        response.status +
+        ": " +
+        errorText
+    );
+  }
+
+  const data = (await response.json()) as {
+    choices?: { message?: { content?: string } }[];
+  };
+
+  const text = data.choices?.[0]?.message?.content ?? "";
+  return text;
+}
+
+const DEFAULT_MODEL =
+  process.env.NEXT_PUBLIC_OPENROUTER_DEFAULT_MODEL || "openai/gpt-4o-mini";
+
 // FIX: Define model names according to guidelines.
-export const GEMINI_PRO = "gemini-2.5-pro";
-export const GEMINI_FLASH = "gemini-2.5-flash";
+export const PRIMARY_MODEL =
+  process.env.NEXT_PUBLIC_OPENROUTER_DOCUMENT_MODEL || DEFAULT_MODEL;
+export const SECONDARY_MODEL = DEFAULT_MODEL;
+
+export const DOCUMENT_MODEL = PRIMARY_MODEL;
+export const CODE_MODEL =
+  process.env.NEXT_PUBLIC_OPENROUTER_CODE_MODEL || DEFAULT_MODEL;
+export const SUGGESTION_MODEL =
+  process.env.NEXT_PUBLIC_OPENROUTER_SUGGESTION_MODEL || DEFAULT_MODEL;
 
 export const DOCUMENT_AGENT_PROMPT = `Você é o "Gênesis", um assistente de IA especialista em tributação brasileira. Sua principal fonte de conhecimento são os documentos fornecidos no contexto. Responda às perguntas de forma clara, informativa e profissional, priorizando sempre as informações contidas nesses documentos. Quando o contexto não for suficiente, use seu conhecimento geral e a busca na web para complementar a resposta. Sempre cite as fontes da web que utilizar.`;
 
@@ -52,14 +104,11 @@ export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
 export async function generateTitle(query: string): Promise<string> {
   try {
     const prompt = `Gere um título curto e descritivo (3-5 palavras) para uma conversa que começa com a seguinte pergunta do usuário. Responda apenas com o título. Pergunta: "${query}"`;
-    // Use getAI().models.generateContent as per guidelines.
-    const response = await getAI().models.generateContent({
-      model: GEMINI_FLASH, // Use the faster model for this simple task
-      contents: prompt,
-    });
+    // Usa o modelo configurado via OpenRouter para gerar o título.
+    const responseText = await callOpenRouter(prompt, SECONDARY_MODEL);
     // Extrai o texto de forma segura, tratando response.text como opcional.
     // Limpa possíveis aspas extras na resposta.
-    const content = (response.text ?? "").trim().replace(/["']/g, "");
+    const content = responseText.trim().replace(/["']/g, "");
 
     if (!content) {
       console.warn("Gemini title generation returned empty response.");
@@ -85,36 +134,16 @@ export async function generateResponse(
   useWebSearch: boolean = false
 ): Promise<{ text: string; sources: WebSource[] }> {
   // Construct config conditionally
-  const config: { tools?: any[] } = {};
   if (useWebSearch) {
-    config.tools = [{ googleSearch: {} }];
   }
 
   // Use getAI().models.generateContent as per guidelines.
-  const response = await getAI().models.generateContent({
-    model: modelName,
-    contents: prompt,
-    config,
-  });
+  const text = await callOpenRouter(prompt, modelName);
 
   // Extract text directly from response.text as per guidelines.
-  const text = response.text || "";
 
   // Extract web sources from grounding metadata if web search was used
   const sources: WebSource[] = [];
-  if (useWebSearch) {
-    const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
-    if (groundingMetadata?.groundingChunks) {
-      for (const chunk of groundingMetadata.groundingChunks) {
-        if (chunk.web?.uri) {
-          sources.push({
-            uri: chunk.web.uri,
-            title: chunk.web.title || chunk.web.uri, // Use URI as fallback for title
-          });
-        }
-      }
-    }
-  }
 
   // Deduplicate sources based on URI
   const uniqueSources = Array.from(

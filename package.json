@@ -6,10 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint --dir ."
   },
   "dependencies": {
-    "@google/genai": "^1.27.0",
     "@supabase/supabase-js": "latest",
     "next": "^16.0.0",
     "react": "^19.2.0",

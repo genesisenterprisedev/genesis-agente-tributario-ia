@@ -4,8 +4,11 @@ import {
   generateEmbeddings,
   generateResponse,
   generateTitle,
-  GEMINI_PRO,
-  GEMINI_FLASH,
+  PRIMARY_MODEL,
+  SECONDARY_MODEL,
+  DOCUMENT_MODEL,
+  CODE_MODEL,
+  SUGGESTION_MODEL,
   CODE_AGENT_PROMPT,
   DOCUMENT_AGENT_PROMPT,
   SUGGESTION_AGENT_PROMPT,
@@ -449,7 +452,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   activeSuggestionConversationId: null,
   isLoading: false,
   activeAgent: "document",
-  activeModel: GEMINI_FLASH,
+  activeModel: SECONDARY_MODEL,
   proTokenCount: 0,
   proTokenLimit: PRO_TOKEN_LIMIT,
   // Auth initial state
@@ -1129,7 +1132,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     let context = "";
     let prompt = finalUserInput;
-    let preferredModel = GEMINI_FLASH;
+    let preferredModel = SECONDARY_MODEL;
     let useWebSearch = false;
 
     try {
@@ -1190,15 +1193,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       if (activeAgent === "document") {
         useWebSearch = true;
+        const documentModel = DOCUMENT_MODEL;
         if (context) {
-          preferredModel = GEMINI_PRO;
+          preferredModel = documentModel;
           prompt = `${DOCUMENT_AGENT_PROMPT}\n\nCom base no seguinte contexto recuperado de seus documentos de conhecimento, responda à pergunta do usuário. Priorize estritamente as informações do contexto. Se o contexto não for suficiente, indique isso e use a busca na web para complementar.\n\nContexto:\n${context}\n\n---\n\nPergunta do usuário: ${finalUserInput}`;
         } else {
-          preferredModel = GEMINI_FLASH;
+          preferredModel = documentModel;
           prompt = `${DOCUMENT_AGENT_PROMPT}\n\nResponda à pergunta do usuário usando seu conhecimento fundamental e a busca na web, pois nenhum contexto relevante foi encontrado nos documentos enviados. Sempre cite as fontes da web que utilizar.\n\nPergunta: ${finalUserInput}`;
         }
       } else if (activeAgent === "code") {
-        preferredModel = GEMINI_PRO;
+        preferredModel = CODE_MODEL;
         let conversationContext = "";
         const currentConvo = (
           get()[conversationKey] as Record<string, Conversation>
@@ -1222,7 +1226,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         prompt = `${CODE_AGENT_PROMPT}\n\n${conversationContext}Tarefa do usuário: ${finalUserInput}`;
       } else if (activeAgent === "suggestion") {
-        preferredModel = GEMINI_FLASH;
+        preferredModel = SUGGESTION_MODEL;
         prompt = `${SUGGESTION_AGENT_PROMPT}\n\nPergunta do usuário para melhorar: "${finalUserInput}"`;
         useWebSearch = false;
       }
@@ -1232,12 +1236,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       let modelToUse = preferredModel;
       if (
-        preferredModel === GEMINI_PRO &&
+        preferredModel === PRIMARY_MODEL &&
         proTokenCount > PRO_TOKEN_LIMIT * PRO_TOKEN_THRESHOLD
       ) {
-        modelToUse = GEMINI_FLASH;
+        modelToUse = SECONDARY_MODEL;
         console.warn(
-          `Token limit for ${GEMINI_PRO} is approaching. Switching to ${GEMINI_FLASH} for this request.`
+          `Token limit for ${PRIMARY_MODEL} is approaching. Switching to ${SECONDARY_MODEL} for this request.`
         );
       }
       set({ activeModel: modelToUse });
