@@ -433,11 +433,6 @@ const { error } = await supabase.from("user_profiles").insert({
 **Endpoint**: Google AI REST API
 
 ```typescript
-// Method: POST
-// Path: https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
-// Authentication: API Key (NEXT_PUBLIC_GEMINI_API_KEY)
-// Rate Limits: Model-specific quotas
-
 const response = await fetch(
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
   {
