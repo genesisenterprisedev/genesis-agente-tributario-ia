@@ -71,7 +71,6 @@ Edit `.env.local` with your configuration:
 
 ```env
 # Google Gemini AI API Key
-NEXT_PUBLIC_GEMINI_API_KEY=your_gemini_api_key_here
 
 # Supabase Configuration (optional - defaults to project settings)
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
@@ -308,7 +307,6 @@ try {
 
 ```typescript
 // Always use NEXT_PUBLIC_ prefix for client-side variables
-const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
 
 // Validate environment variables
 if (!apiKey) {
@@ -350,7 +348,6 @@ if (!apiKey) {
 
 ### Common Issues
 
-#### "NEXT_PUBLIC_GEMINI_API_KEY not found"
 
 **Solution**:
 

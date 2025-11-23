@@ -121,7 +121,6 @@ Aqui está um exemplo completo de `.env.local` para referência:
 
 ```bash
 # Gemini AI Configuration (Legacy - opcional)
-NEXT_PUBLIC_GEMINI_API_KEY=your_gemini_api_key_here
 
 # Supabase Configuration
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
