@@ -38,6 +38,36 @@
       "regex": "^/_not\\-found(?:/)?$",
       "routeKeys": {},
       "namedRegex": "^/_not\\-found(?:/)?$"
+    },
+    {
+      "page": "/api/chat",
+      "regex": "^/api/chat(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/chat(?:/)?$"
+    },
+    {
+      "page": "/api/diagnostics",
+      "regex": "^/api/diagnostics(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/diagnostics(?:/)?$"
+    },
+    {
+      "page": "/api/embed",
+      "regex": "^/api/embed(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/embed(?:/)?$"
+    },
+    {
+      "page": "/api/search",
+      "regex": "^/api/search(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/search(?:/)?$"
+    },
+    {
+      "page": "/api/send-email",
+      "regex": "^/api/send\\-email(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/send\\-email(?:/)?$"
     }
   ],
   "dataRoutes": [],

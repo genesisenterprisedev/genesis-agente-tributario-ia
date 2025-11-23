@@ -3,17 +3,23 @@ import { processDocument, processText } from "./api";
 import {
   generateEmbeddings,
   generateResponse,
+  generateResponseWithRAG,
   generateTitle,
   PRIMARY_MODEL,
   SECONDARY_MODEL,
-  DOCUMENT_MODEL,
-  CODE_MODEL,
-  SUGGESTION_MODEL,
   CODE_AGENT_PROMPT,
   DOCUMENT_AGENT_PROMPT,
   SUGGESTION_AGENT_PROMPT,
+  getModelWithFallback,
 } from "./services/geminiService";
-import { Document, Message, AgentType, Conversation } from "./types";
+import {
+  Document,
+  Message,
+  AgentType,
+  Conversation,
+  Contact,
+  MessageAttachment,
+} from "./types";
 import { cosineSimilarity } from "./utils";
 import { initialKnowledgeText } from "./initialKnowledge";
 import { taxReformKnowledgeText } from "./taxReformKnowledge";
@@ -181,6 +187,24 @@ CREATE INDEX IF NOT EXISTS idx_messages_user_id ON public.messages(user_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON public.conversations(updated_at DESC);
 
 
+-- Tabela para registrar uso de LLM por usuário e modelo
+CREATE TABLE IF NOT EXISTS public.llm_usage (
+  id UUID NOT NULL DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  agent_type TEXT NOT NULL,
+  prompt_tokens INTEGER DEFAULT 0,
+  completion_tokens INTEGER DEFAULT 0,
+  total_tokens INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT llm_usage_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_usage_user_id ON public.llm_usage(user_id);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_created_at ON public.llm_usage(created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_model ON public.llm_usage(model);
+
+
 -- SEED DE DADOS: Insere os documentos da base de conhecimento inicial.
 -- É seguro rodar isso várias vezes por causa do "ON CONFLICT".
 -- A execução deste script no painel do Supabase ignora a RLS, permitindo a inserção de documentos públicos (user_id = NULL).
@@ -258,6 +282,7 @@ interface DocumentState {
   addDocument: (file: File) => Promise<void>;
   deleteDocument: (id: string) => Promise<void>;
   renameDocument: (id: string, newName: string) => Promise<void>;
+  moveToKnowledgeBase: (id: string) => Promise<void>;
   loadInitialDocuments: () => Promise<void>;
 }
 
@@ -345,6 +370,28 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       // Atualiza o documento em memória com o ID confirmado do banco de dados
       newDocument.id = data.id;
 
+      // Persiste também os embeddings dos chunks na tabela document_embeddings
+      // para uso eficiente pelo mecanismo de busca vetorial (RAG).
+      if (newDocument.chunks && newDocument.chunks.length > 0) {
+        const embeddingsPayload = newDocument.chunks.map((chunk, index) => ({
+          document_id: data.id,
+          chunk_index: index,
+          chunk_text: chunk.text,
+          embedding: chunk.embedding,
+          metadata: { name: newDocument.name },
+        }));
+
+        const { error: embeddingsError } = await supabase
+          .from("document_embeddings")
+          .insert(embeddingsPayload);
+
+        if (embeddingsError) {
+          const detail = getErrorMessage(embeddingsError);
+          console.error("Error inserting document embeddings:", detail);
+          // Não falha o fluxo principal de upload de documento, apenas registra o erro.
+        }
+      }
+
       set((state) => ({ documents: [...state.documents, newDocument] }));
     } catch (e: unknown) {
       const detail = getErrorMessage(e);
@@ -385,6 +432,118 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       ),
     }));
   },
+  moveToKnowledgeBase: async (id) => {
+    try {
+      set({ isLoading: true, error: null });
+
+      // 1. Obter documento
+      const doc = get().documents.find((d) => d.id === id);
+      if (!doc) {
+        throw new Error("Documento não encontrado");
+      }
+
+      if (!doc.content || doc.content.trim().length === 0) {
+        throw new Error("Documento não possui conteúdo para processar");
+      }
+
+      // 2. Dividir em chunks
+      const { chunkByParagraphs } = await import("./utils/textChunking");
+      const chunks = chunkByParagraphs(doc.content, 800);
+
+      if (chunks.length === 0) {
+        throw new Error("Não foi possível gerar chunks do documento");
+      }
+
+      console.log(`Processando ${chunks.length} chunks para embeddings...`);
+
+      // 3. Gerar embeddings para cada chunk
+      let successCount = 0;
+      for (const chunk of chunks) {
+        try {
+          // Gerar embedding
+          const embeddingResponse = await fetch("/api/embed", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: chunk.text }),
+          });
+
+          if (!embeddingResponse.ok) {
+            console.error(`Erro ao gerar embedding para chunk ${chunk.index}`);
+            continue;
+          }
+
+          const { embedding } = await embeddingResponse.json();
+
+          // Salvar no banco
+          const { error: insertError } = await supabase
+            .from("document_embeddings")
+            .insert({
+              document_id: id,
+              chunk_index: chunk.index,
+              chunk_text: chunk.text,
+              embedding: embedding,
+              metadata: {
+                length: chunk.text.length,
+                processed_at: new Date().toISOString(),
+                document_name: doc.name,
+              },
+            });
+
+          if (insertError) {
+            console.error(
+              `Erro ao salvar embedding ${chunk.index}:`,
+              insertError
+            );
+          } else {
+            successCount++;
+          }
+
+          // Pequeno delay para não sobrecarregar a API
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        } catch (chunkError) {
+          console.error(`Erro ao processar chunk ${chunk.index}:`, chunkError);
+        }
+      }
+
+      console.log(
+        `${successCount}/${chunks.length} embeddings salvos com sucesso`
+      );
+
+      if (successCount === 0) {
+        throw new Error(
+          "Nenhum embedding foi salvo. Verifique a configuração da API."
+        );
+      }
+
+      // 4. Atualizar documento para não-deletável
+      const { error: updateError } = await supabase
+        .from("documents")
+        .update({ is_deletable: false })
+        .match({ id });
+
+      if (updateError) throw updateError;
+
+      // 5. Atualizar estado local
+      set((state) => ({
+        documents: state.documents.map((doc) =>
+          doc.id === id ? { ...doc, isDeletable: false } : doc
+        ),
+        isLoading: false,
+      }));
+
+      console.log(
+        `✅ Documento adicionado à base com ${successCount} embeddings!`
+      );
+    } catch (e: unknown) {
+      const detail = getErrorMessage(e);
+      console.error("Error moving document to knowledge base:", detail);
+      set({
+        error: `Erro ao adicionar à base: ${detail}`,
+        isLoading: false,
+      });
+      throw e;
+    }
+  },
 }));
 
 // Helper to create a new conversation object
@@ -405,9 +564,9 @@ interface ChatState {
   activeSuggestionConversationId: string | null;
   isLoading: boolean;
   activeAgent: AgentType;
-  activeModel: string;
   proTokenCount: number;
   proTokenLimit: number;
+  visibleAgents: boolean; // Se TRUE, mostra dados da LLM (tokens, modelo, etc.)
   // Auth state
   session: Session | null;
   user: User | null;
@@ -424,11 +583,17 @@ interface ChatState {
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   sendPasswordResetEmail: (email: string) => Promise<void>;
+  updatePassword: (password: string) => Promise<void>;
   clearAuthFeedback: () => void;
   // Chat methods
   loadInitialData: () => Promise<void>;
   setActiveAgent: (agent: AgentType) => void;
-  sendMessage: (userInput: string, documents: Document[]) => Promise<void>;
+  sendMessage: (
+    userInput: string,
+    documents: Document[],
+    clientMessageId?: string,
+    attachmentsMeta?: MessageAttachment[]
+  ) => Promise<void>;
   startNewConversation: (agent: AgentType) => Promise<void>;
   deleteConversation: (
     agent: AgentType,
@@ -441,6 +606,18 @@ interface ChatState {
     messageId: string,
     feedback: "good" | "bad"
   ) => Promise<void>;
+  sendGeneralFeedback: (message: string) => Promise<void>;
+  deleteMessage: (
+    agent: AgentType,
+    conversationId: string,
+    messageId: string
+  ) => Promise<void>;
+  sendConversationByEmail: (
+    agent: AgentType,
+    conversationId: string,
+    toEmail?: string
+  ) => Promise<void>;
+  saveContact: (contact: Omit<Contact, "id" | "created_at">) => Promise<void>;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -452,9 +629,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   activeSuggestionConversationId: null,
   isLoading: false,
   activeAgent: "document",
-  activeModel: SECONDARY_MODEL,
   proTokenCount: 0,
   proTokenLimit: PRO_TOKEN_LIMIT,
+  visibleAgents: true, // Padrão: mostrar dados da LLM
   // Auth initial state
   session: null,
   user: null,
@@ -566,6 +743,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       });
     }
   },
+  updatePassword: async (password) => {
+    set({ authLoading: true, authError: null, authMessage: null });
+    const { error } = await supabase.auth.updateUser({ password });
+    if (error) {
+      set({ authLoading: false, authError: error });
+    } else {
+      set({
+        authLoading: false,
+        authMessage: "Senha atualizada com sucesso!",
+      });
+    }
+  },
   clearAuthFeedback: () => {
     set({ authError: null, authMessage: null });
   },
@@ -585,9 +774,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (user) {
       try {
         // RLS on user_profiles ensures we only get the current user's profile.
-        const { data: _profile, error: profileError } = await supabase
+        const { data: profile, error: profileError } = await supabase
           .from("user_profiles")
-          .select("user_id, full_name")
+          .select("user_id, full_name, visible_agents")
           .eq("user_id", user.id)
           .single();
 
@@ -605,10 +794,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
               user_id: user.id,
               full_name: userMetadata.full_name,
               user_type: userMetadata.user_type,
+              visible_agents: true, // Padrão: mostrar dados da LLM
             });
           if (insertError) throw insertError;
+
+          // Definir padrão no estado
+          set({ visibleAgents: true });
         } else if (profileError && profileError.code !== "PGRST116") {
           throw profileError;
+        } else if (profile) {
+          // Atualizar estado com o valor do banco
+          set({ visibleAgents: profile.visible_agents ?? true });
         }
       } catch (e) {
         const detail = getErrorMessage(e);
@@ -655,14 +851,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       for (const convo of convos) {
         const convoMessages = messages
           .filter((m) => m.conversation_id === convo.id)
-          .map((m) => ({
-            id: m.id,
-            sender: m.sender as "user" | "bot",
-            text: m.text,
-            feedback: m.feedback as "good" | "bad" | null,
-            sources: m.sources,
-            createdAt: new Date(m.created_at).getTime(),
-          }));
+          .map(
+            (m) =>
+              ({
+                id: m.id,
+                sender: m.sender as "user" | "bot",
+                text: m.text,
+                feedback: m.feedback as "good" | "bad" | null,
+                sources: m.sources,
+                createdAt: new Date(m.created_at).getTime(),
+                // attachments é um JSONB opcional no banco; mantemos como está vindo
+                attachments: (m as any).attachments ?? undefined,
+              }) as Message
+          );
 
         const conversationObject: Conversation = {
           id: convo.id,
@@ -686,31 +887,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const sortConversations = (a: Conversation, b: Conversation) =>
         (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt);
 
-      const sortedDocIds = Object.values(docConvos)
-        .sort(sortConversations)
-        .map((c) => c.id);
-      const sortedCodeIds = Object.values(codeConvos)
-        .sort(sortConversations)
-        .map((c) => c.id);
-      const sortedSuggestionIds = Object.values(suggestionConvos)
-        .sort(sortConversations)
-        .map((c) => c.id);
+      // Sort conversations by date (sorted IDs are available but not currently used)
+      Object.values(docConvos).sort(sortConversations);
+      Object.values(codeConvos).sort(sortConversations);
+      Object.values(suggestionConvos).sort(sortConversations);
 
       set({
         documentConversations: docConvos,
         codeConversations: codeConvos,
         suggestionConversations: suggestionConvos,
-        activeDocumentConversationId: sortedDocIds[0] || null,
-        activeCodeConversationId: sortedCodeIds[0] || null,
-        activeSuggestionConversationId: sortedSuggestionIds[0] || null,
+        activeDocumentConversationId: null,
+        activeCodeConversationId: null,
+        activeSuggestionConversationId: null,
       });
-
-      if (
-        get().activeAgent === "document" &&
-        !get().activeDocumentConversationId
-      ) {
-        await get().startNewConversation("document");
-      }
     } catch (e: unknown) {
       const detail = getErrorMessage(e);
       let errorMessage = `Erro ao carregar o histórico de conversas: ${detail}`;
@@ -735,29 +924,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setActiveAgent: (agent) => {
     set({ activeAgent: agent });
-    const state = get();
-    let shouldStartNew = false;
-    switch (agent) {
-      case "document":
-        shouldStartNew =
-          !state.activeDocumentConversationId ||
-          !state.documentConversations[state.activeDocumentConversationId];
-        break;
-      case "code":
-        shouldStartNew =
-          !state.activeCodeConversationId ||
-          !state.codeConversations[state.activeCodeConversationId];
-        break;
-      case "suggestion":
-        shouldStartNew =
-          !state.activeSuggestionConversationId ||
-          !state.suggestionConversations[state.activeSuggestionConversationId];
-        break;
-    }
-
-    if (shouldStartNew) {
-      get().startNewConversation(agent);
-    }
   },
 
   startNewConversation: async (agent) => {
@@ -892,13 +1058,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         [activeIdKey]: originalActiveId,
       });
     }
-
-    if (
-      Object.keys(get()[conversationKey] as Record<string, Conversation>)
-        .length === 0
-    ) {
-      get().startNewConversation(agent);
-    }
   },
 
   setActiveConversation: (agent, conversationId) => {
@@ -968,7 +1127,134 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  sendMessage: async (userInput, documents) => {
+  deleteMessage: async (agent, conversationId, messageId) => {
+    let conversationKey: keyof ChatState | undefined;
+    if (agent === "document") conversationKey = "documentConversations";
+    else if (agent === "code") conversationKey = "codeConversations";
+    else if (agent === "suggestion")
+      conversationKey = "suggestionConversations";
+
+    if (!conversationKey) return;
+
+    const state = get();
+    // @ts-ignore
+    const conversations = state[conversationKey] as Record<
+      string,
+      Conversation
+    >;
+    const conversation = conversations[conversationId];
+
+    if (!conversation) {
+      console.error(`Conversation not found: ${conversationId}`);
+      return;
+    }
+
+    const updatedMessages = conversation.messages.filter(
+      (msg) => msg.id !== messageId
+    );
+
+    set((state) => {
+      const currentConversations = state[conversationKey!] as Record<
+        string,
+        Conversation
+      >;
+      return {
+        [conversationKey!]: {
+          ...currentConversations,
+          [conversationId]: {
+            ...conversation,
+            messages: updatedMessages,
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    });
+  },
+
+  sendConversationByEmail: async (agent, conversationId, toEmail) => {
+    const user = get().user;
+    if (!user || !user.email) {
+      throw new Error("Usuário não possui email cadastrado.");
+    }
+
+    let conversationKey: keyof ChatState | undefined;
+    if (agent === "document") conversationKey = "documentConversations";
+    else if (agent === "code") conversationKey = "codeConversations";
+    else if (agent === "suggestion")
+      conversationKey = "suggestionConversations";
+
+    if (!conversationKey) return;
+
+    const state = get();
+    // @ts-ignore
+    const conversations = state[conversationKey] as Record<
+      string,
+      Conversation
+    >;
+    const conversation = conversations[conversationId];
+
+    if (!conversation) {
+      throw new Error("Conversa não encontrada.");
+    }
+
+    try {
+      const response = await fetch("/api/send-email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: toEmail || user.email,
+          conversationTitle: conversation.title,
+          messages: conversation.messages,
+          userName: user.user_metadata?.full_name || user.email,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error?.message || "Falha ao enviar email.");
+      }
+    } catch (error: any) {
+      console.error("Erro ao enviar conversa por email:", error);
+      throw error;
+    }
+  },
+
+  saveContact: async (contact) => {
+    try {
+      const { error } = await supabase.from("contacts").insert([contact]);
+      if (error) {
+        console.error("Supabase insert error:", error);
+        throw error;
+      }
+    } catch (e: any) {
+      console.error("Unexpected error in saveContact:", e);
+      const errMsg = typeof e === "object" ? JSON.stringify(e) : String(e);
+      throw new Error(errMsg || "Unexpected error while saving contact");
+    }
+  },
+
+  sendGeneralFeedback: async (message) => {
+    const user = get().user;
+    const { error } = await supabase.from("feedbacks").insert({
+      user_id: user?.id || null,
+      message: message,
+    });
+
+    if (error) {
+      const detail = getErrorMessage(error);
+      console.error("Failed to send feedback:", detail);
+      throw new Error(`Falha ao enviar feedback: ${detail}`);
+    }
+  },
+
+  sendMessage: async (
+    userInput,
+    documents,
+    clientMessageId,
+    attachmentsMeta
+  ) => {
     const originalUserInput = userInput.trim();
     if (!originalUserInput) return;
 
@@ -1057,8 +1343,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         activeConversationId!
       ]?.messages.length ?? 0) === 0;
 
+    // Reuse client-side message ID when provided so UI attachments can
+    // be associated with the same message instance stored no estado.
+    const userMessageId = clientMessageId || crypto.randomUUID();
+
     const userMessage: Message = {
-      id: crypto.randomUUID(),
+      id: userMessageId,
       sender: "user",
       text: finalUserInput,
       createdAt: Date.now(),
@@ -1090,6 +1380,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sources: null,
       created_at: new Date(userMessage.createdAt).toISOString(),
       user_id: user.id,
+      attachments:
+        attachmentsMeta && attachmentsMeta.length > 0 ? attachmentsMeta : null,
     });
     if (userMsgError) {
       const detail = getErrorMessage(userMsgError);
@@ -1136,6 +1428,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     let useWebSearch = false;
 
     try {
+      // Seleciona o modelo ideal para o tipo de agente com fallback inteligente
+      preferredModel = getModelWithFallback(activeAgent);
+
       if (activeAgent === "document" && documents.length > 0) {
         const queryEmbedding = (await generateEmbeddings([finalUserInput]))[0];
         const allChunks = documents.flatMap((doc) => doc.chunks);
@@ -1193,16 +1488,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       if (activeAgent === "document") {
         useWebSearch = true;
-        const documentModel = DOCUMENT_MODEL;
         if (context) {
-          preferredModel = documentModel;
           prompt = `${DOCUMENT_AGENT_PROMPT}\n\nCom base no seguinte contexto recuperado de seus documentos de conhecimento, responda à pergunta do usuário. Priorize estritamente as informações do contexto. Se o contexto não for suficiente, indique isso e use a busca na web para complementar.\n\nContexto:\n${context}\n\n---\n\nPergunta do usuário: ${finalUserInput}`;
         } else {
-          preferredModel = documentModel;
           prompt = `${DOCUMENT_AGENT_PROMPT}\n\nResponda à pergunta do usuário usando seu conhecimento fundamental e a busca na web, pois nenhum contexto relevante foi encontrado nos documentos enviados. Sempre cite as fontes da web que utilizar.\n\nPergunta: ${finalUserInput}`;
         }
       } else if (activeAgent === "code") {
-        preferredModel = CODE_MODEL;
         let conversationContext = "";
         const currentConvo = (
           get()[conversationKey] as Record<string, Conversation>
@@ -1226,7 +1517,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         prompt = `${CODE_AGENT_PROMPT}\n\n${conversationContext}Tarefa do usuário: ${finalUserInput}`;
       } else if (activeAgent === "suggestion") {
-        preferredModel = SUGGESTION_MODEL;
         prompt = `${SUGGESTION_AGENT_PROMPT}\n\nPergunta do usuário para melhorar: "${finalUserInput}"`;
         useWebSearch = false;
       }
@@ -1244,13 +1534,45 @@ export const useChatStore = create<ChatState>((set, get) => ({
           `Token limit for ${PRIMARY_MODEL} is approaching. Switching to ${SECONDARY_MODEL} for this request.`
         );
       }
-      set({ activeModel: modelToUse });
 
-      const { text, sources } = await generateResponse(
-        modelToUse,
-        prompt,
-        useWebSearch
-      );
+      // Usar RAG apenas para o agente de documentos
+      let text: string;
+      let sources: any[] = [];
+      let contextUsed = false;
+      let documentsReferenced: string[] = [];
+
+      if (activeAgent === "document") {
+        // Usar RAG para agente de documentos
+        const ragResponse = await generateResponseWithRAG(
+          modelToUse,
+          finalUserInput,
+          DOCUMENT_AGENT_PROMPT,
+          "", // Histórico já está no contexto do prompt
+          useWebSearch
+        );
+        text = ragResponse.text;
+        sources = ragResponse.sources;
+        contextUsed = ragResponse.contextUsed;
+        documentsReferenced = ragResponse.documentsReferenced;
+
+        // Log para debug
+        if (contextUsed) {
+          console.log(
+            `[RAG] Resposta gerada usando ${documentsReferenced.length} documento(s): ${documentsReferenced.join(", ")}`
+          );
+        } else {
+          console.log("[RAG] Resposta gerada sem contexto de documentos");
+        }
+      } else {
+        // Usar resposta normal para outros agentes
+        const response = await generateResponse(
+          modelToUse,
+          prompt,
+          useWebSearch
+        );
+        text = response.text;
+        sources = response.sources;
+      }
 
       const now = Date.now();
       const botMessage: Message = {
@@ -1310,10 +1632,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const detail = getErrorMessage(e);
       console.error("Error generating response:", detail);
       const errorTime = Date.now();
+
       const errorMessage: Message = {
         id: crypto.randomUUID(),
         sender: "bot",
-        text: `Ocorreu um erro ao processar sua solicitação. Por favor, tente novamente.\n\nDetalhes do erro:\n\`\`\`\n${detail}\n\`\`\``,
+        text: "Ocorreu um erro ao processar sua solicitação. Nossa equipe já foi notificada e está analisando o problema. Por favor, tente novamente mais tarde ou entre em contato com o suporte da plataforma pelo e-mail infra.genesisplatform@gmail.com.",
         createdAt: errorTime,
       };
 

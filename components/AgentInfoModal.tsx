@@ -2,6 +2,7 @@ import React from 'react';
 import { AgentType } from '../types';
 import { CloseIcon } from './icons/CloseIcon';
 import { BotIcon } from './icons/BotIcon';
+import { DOCUMENT_MODEL, PRIMARY_MODEL } from '../services/geminiService';
 
 interface AgentInfoModalProps {
   isOpen: boolean;
@@ -69,70 +70,107 @@ const AgentInfoModal: React.FC<AgentInfoModalProps> = ({ isOpen, onClose, agentT
 
   return (
     <div
-      className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-fade-in"
+      className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 animate-fade-in"
       onClick={onClose}
       aria-modal="true"
       role="dialog"
     >
       <div
-        className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col transform transition-transform duration-300 animate-slide-up"
+        className="bg-white dark:bg-black border border-gray-200 dark:border-white/20 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col transform transition-transform duration-300 animate-slide-up"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+        <header className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-white/20">
           <div className="flex items-center gap-3">
-            <div className="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center bg-gray-200 dark:bg-gray-700">
-                <BotIcon className="w-6 h-6 text-gray-600 dark:text-gray-300" />
+            <div className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center bg-gray-200 dark:bg-white/10">
+              <BotIcon className="w-6 h-6 text-gray-600 dark:text-white" />
             </div>
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white" id="modal-title">
-                {content.title}
+              {content.title}
             </h2>
           </div>
           <button
             onClick={onClose}
-            className="p-1 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full"
+            className="p-1 text-gray-500 dark:text-white hover:bg-gray-200 dark:hover:bg-white/10 rounded-full"
             aria-label="Fechar modal"
           >
             <CloseIcon className="w-6 h-6" />
           </button>
         </header>
 
-        <main className="p-6 overflow-y-auto text-gray-700 dark:text-gray-300">
+        <main className="p-6 overflow-y-auto text-black dark:text-white">
           <p className="text-sm leading-relaxed mb-6">{content.description}</p>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <h3 className="text-md font-semibold text-gray-800 dark:text-gray-100 mb-2">
+              <h3 className="text-md font-semibold text-black dark:text-white mb-2">
                 Capacidades
               </h3>
               <ul className="space-y-2 list-disc list-inside text-sm">
                 {content.capabilities.map((item, index) => (
                   <li key={index} className="flex items-start">
-                    <span className="text-green-500 mr-2 mt-1">&#10003;</span>
+                    <span className="text-black dark:text-white mr-2 mt-1">&#10003;</span>
                     <span>{item}</span>
                   </li>
                 ))}
               </ul>
             </div>
             <div>
-              <h3 className="text-md font-semibold text-gray-800 dark:text-gray-100 mb-2">
+              <h3 className="text-md font-semibold text-black dark:text-white mb-2">
                 Limitações
               </h3>
               <ul className="space-y-2 list-disc list-inside text-sm">
                 {content.limitations.map((item, index) => (
-                   <li key={index} className="flex items-start">
-                    <span className="text-red-500 mr-2 mt-1">&#10007;</span>
+                  <li key={index} className="flex items-start">
+                    <span className="text-black dark:text-white mr-2 mt-1">&#10007;</span>
                     <span>{item}</span>
                   </li>
                 ))}
               </ul>
             </div>
           </div>
-          
-           <div className="mt-6 p-3 bg-yellow-50 dark:bg-yellow-900/20 border-l-4 border-yellow-400 dark:border-yellow-500 rounded-r-lg">
-                <p className="text-xs text-yellow-800 dark:text-yellow-300">
-                    <strong>Aviso:</strong> As informações e o código gerados por esta IA são para fins informativos e não substituem o aconselhamento de um profissional qualificado. Verifique sempre as informações com fontes oficiais.
-                </p>
-            </div>
+
+          {agentType === 'document' && (
+            <section className="mt-6">
+              <h3 className="text-md font-semibold text-black dark:text-white mb-2">
+                Modelos LLM configurados
+              </h3>
+              <p className="text-xs text-gray-600 dark:text-gray-300 mb-3">
+                Estes modelos são definidos na configuração do ambiente e indicam qual LLM está sendo usado atualmente para o Consultor de Documentos.
+              </p>
+              <dl className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div>
+                  <dt className="font-semibold text-black dark:text-white">
+                    Modelo do Consultor de Documentos
+                  </dt>
+                  <dd className="text-gray-700 dark:text-gray-300 break-all">
+                    {DOCUMENT_MODEL}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="font-semibold text-black dark:text-white">
+                    Modelo padrão (fallback global)
+                  </dt>
+                  <dd className="text-gray-700 dark:text-gray-300 break-all">
+                    {PRIMARY_MODEL}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="font-semibold text-black dark:text-white">
+                    Modelo de embeddings de documentos
+                  </dt>
+                  <dd className="text-gray-700 dark:text-gray-300 break-all">
+                    text-embedding-ada-002
+                  </dd>
+                </div>
+              </dl>
+            </section>
+          )}
+
+          <div className="mt-6 p-3 bg-gray-100 dark:bg-white/10 border-l-4 border-black dark:border-white rounded-r-lg">
+            <p className="text-xs text-black dark:text-white">
+              <strong>Aviso:</strong> As informações e o código gerados por esta IA são para fins informativos e não substituem o aconselhamento de um profissional qualificado. Verifique sempre as informações com fontes oficiais.
+            </p>
+          </div>
 
         </main>
       </div>

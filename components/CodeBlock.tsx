@@ -53,8 +53,8 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, code }) => {
   const canSave = !!fileExtension;
 
   return (
-    <div className="my-4 rounded-lg bg-gray-900 dark:bg-black overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2 bg-gray-800 dark:bg-gray-900/50">
+    <div className="my-4 rounded-lg bg-black border border-white/20 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2 bg-white/10">
         <span className="text-xs font-semibold text-gray-400 uppercase">{language}</span>
         <div className="flex items-center gap-4">
           {canSave && (
@@ -72,7 +72,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, code }) => {
           >
             {copied ? (
               <>
-                <CheckIcon className="w-4 h-4 text-green-400" />
+                <CheckIcon className="w-4 h-4 text-white" />
                 Copiado!
               </>
             ) : (

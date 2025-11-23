@@ -11,13 +11,11 @@ declare global {
       /** Loaded from `.env.local` */
       NEXT_PUBLIC_RESEND_API_URL?: string
       /** Loaded from `.env.local` */
+      OPENROUTER_API_KEY?: string
+      /** Loaded from `.env.local` */
       NEXT_PUBLIC_OPENROUTER_API_URL?: string
       /** Loaded from `.env.local` */
       NEXT_PUBLIC_LLM_PROVIDER?: string
-      /** Loaded from `.env.local` */
-      NEXT_PUBLIC_OPENROUTER_API_KEY?: string
-      /** Loaded from `.env.local` */
-      NEXT_PUBLIC_OPENROUTER_DEFAULT_MODEL?: string
       /** Loaded from `.env.local` */
       NEXT_PUBLIC_OPENROUTER_DOCUMENT_MODEL?: string
       /** Loaded from `.env.local` */

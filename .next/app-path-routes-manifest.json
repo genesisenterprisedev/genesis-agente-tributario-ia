@@ -1,5 +1,10 @@
 {
   "/_global-error/page": "/_global-error",
   "/_not-found/page": "/_not-found",
+  "/api/chat/route": "/api/chat",
+  "/api/diagnostics/route": "/api/diagnostics",
+  "/api/embed/route": "/api/embed",
+  "/api/search/route": "/api/search",
+  "/api/send-email/route": "/api/send-email",
   "/page": "/"
 }
